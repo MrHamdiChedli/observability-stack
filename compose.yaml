@@ -128,7 +128,7 @@ services:
 
   # --- Dashboards ---
   grafana:
-    image: grafana/grafana:13.2.5
+    image: grafana/grafana:13.3.0
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
