@@ -1,0 +1,62 @@
+groups:
+  - name: visit-counter
+    rules:
+      - alert: AppDown
+        expr: absent(up{job="app"} == 1)
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: No app replica is answering
+          description: Prometheus can't scrape any app replica. Users get errors.
+
+      - alert: AppReplicaMissing
+        expr: count(up{job="app"} == 1) < 2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Only {{ $value }} app replica(s) running out of 2"
+          description: The service still works, but without redundancy.
+
+      - alert: DatabaseDown
+        expr: pg_up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: PostgreSQL is unreachable
+          description: The postgres exporter can't connect to the database.
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[1m]))
+            / sum(rate(http_requests_total[1m])) > 0.05
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests fail"
+          description: More than 5% of requests return a 5xx error.
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "95% of requests take up to {{ $value | humanizeDuration }}"
+          description: The 95th percentile response time is above 500 ms.
+
+  - name: host
+    rules:
+      - alert: HostDiskAlmostFull
+        expr: |
+          node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Less than 10% disk space left on {{ $labels.instance }}"

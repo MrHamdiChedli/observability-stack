@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the Prometheus config and alert rules
+        run: >-
+          docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint promtool
+          prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml
+      - name: Unit-test the alert rules
+        run: >-
+          docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" -w /etc/prometheus/tests
+          --entrypoint promtool prom/prometheus:v3.15.1 test rules alerts_test.yml
+      - name: Check the Alertmanager config
+        run: >-
+          docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" --entrypoint amtool
+          prom/alertmanager:v0.34.1 check-config /etc/alertmanager/alertmanager.yml
+      - name: Check the Alloy config
+        run: docker run --rm -v "$PWD/alloy:/cfg:ro" grafana/alloy:v1.20.1 fmt /cfg/config.alloy > /dev/null
+      - name: Check the Compose file and the dashboard JSON
+        run: |
+          bash scripts/init-secrets.sh
+          docker compose config --quiet
+          python3 -m json.tool grafana/dashboards/visit-counter.json > /dev/null
+      - name: Lint Python and shell
+        run: |
+          pipx run ruff==0.7.4 check app
+          shellcheck scripts/*.sh tests/*.sh
+
+  stack-test:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash scripts/init-secrets.sh
+      - name: Start the app and the monitoring stack
+        run: docker compose up --detach --build --wait
+      - name: Test metrics, dashboards, logs and alerts end to end
+        run: bash tests/observability-test.sh
+      - name: Show the logs if something failed
+        if: failure()
+        run: docker compose logs --tail=60
+      - if: always()
+        run: docker compose down --volumes

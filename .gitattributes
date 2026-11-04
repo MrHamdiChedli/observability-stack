@@ -1,0 +1,3 @@
+* text=auto
+# Linux can't run scripts with Windows line endings, even when edited on Windows
+*.sh text eol=lf

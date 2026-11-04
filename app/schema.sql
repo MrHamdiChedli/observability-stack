@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS visits (
+    id    INTEGER PRIMARY KEY,
+    total BIGINT NOT NULL
+);

@@ -1,0 +1,70 @@
+# Unit tests for the alert rules: run with `promtool test rules prometheus/tests/alerts_test.yml`.
+rule_files:
+  - ../rules/alerts.yml
+
+evaluation_interval: 10s
+
+tests:
+  - name: DatabaseDown fires after 15s, not before
+    interval: 10s
+    input_series:
+      - series: 'pg_up{job="postgres"}'
+        values: "1 1 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: DatabaseDown
+        exp_alerts: []
+      - eval_time: 40s
+        alertname: DatabaseDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: postgres }
+            exp_annotations:
+              summary: PostgreSQL is unreachable
+              description: The postgres exporter can't connect to the database.
+
+  - name: HighErrorRate fires above 5% errors and stays quiet at 2%
+    interval: 10s
+    input_series:
+      # 100 requests every 10s; errors go from 2 to 20 per 10s at t=2m.
+      - series: 'http_requests_total{status="200"}'
+        values: "0+98x12 1176+80x12"
+      - series: 'http_requests_total{status="500"}'
+        values: "0+2x12 24+20x12"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HighErrorRate
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: 20% of requests fail
+              description: More than 5% of requests return a 5xx error.
+
+  - name: AppReplicaMissing and AppDown
+    interval: 10s
+    input_series:
+      - series: 'up{job="app", instance="a"}'
+        values: "1x10 0x20"
+      - series: 'up{job="app", instance="b"}'
+        values: "1x20 0x10"
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: AppReplicaMissing
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: AppReplicaMissing
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: Only 1 app replica(s) running out of 2
+              description: The service still works, but without redundancy.
+      - eval_time: 4m20s
+        alertname: AppDown
+        exp_alerts:
+          # No job label: absent() only copies labels from a plain selector, not from "up{...} == 1".
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: No app replica is answering
+              description: Prometheus can't scrape any app replica. Users get errors.

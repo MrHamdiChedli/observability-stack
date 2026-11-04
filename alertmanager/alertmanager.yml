@@ -1,0 +1,20 @@
+# Alerts are grouped and visible in the Alertmanager UI (http://<host>:9093).
+# A real setup adds a receiver here: email, Slack, PagerDuty or a webhook.
+route:
+  receiver: default
+  group_by: [alertname]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: default
+      group_wait: 0s
+
+receivers:
+  - name: default
+
+# A critical alert silences the warnings it explains (no AppReplicaMissing while AppDown fires).
+inhibit_rules:
+  - source_matchers: [alertname="AppDown"]
+    target_matchers: [alertname="AppReplicaMissing"]

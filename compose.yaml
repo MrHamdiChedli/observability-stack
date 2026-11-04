@@ -1,0 +1,163 @@
+name: visit-counter
+
+x-hardened: &hardened
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+services:
+  # --- The application (same stack as docker-visit-counter) ---
+  lb:
+    image: nginx:1.27-alpine
+    ports: ["8080:80"]
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [frontend]
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  app:
+    build: ./app
+    image: visit-counter:metrics
+    deploy:
+      replicas: 2
+    environment:
+      DB_HOST: db
+      DB_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    networks: [frontend, backend]
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    <<: *hardened
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: appdb
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./app/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d appdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # --- Metrics ---
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    networks: [frontend, monitoring]
+    <<: *hardened
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    command: [--config.file=/etc/alertmanager/alertmanager.yml]
+    ports: ["9093:9093"]
+    volumes:
+      - ./alertmanager:/etc/alertmanager:ro
+    networks: [monitoring]
+    <<: *hardened
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    environment:
+      DATA_SOURCE_URI: db:5432/appdb?sslmode=disable
+      DATA_SOURCE_USER: app
+      DATA_SOURCE_PASS_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    networks: [backend, monitoring]
+    <<: *hardened
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro,rslave
+    networks: [monitoring]
+    <<: *hardened
+
+  # --- Logs ---
+  loki:
+    image: grafana/loki:3.7.9
+    command: [-config.file=/etc/loki/loki.yml]
+    ports: ["3100:3100"]
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    networks: [monitoring]
+    <<: *hardened
+
+  alloy:
+    image: grafana/alloy:v1.20.1
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only access to the Docker API to discover containers and read their logs.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [monitoring]
+    depends_on: [loki]
+    restart: unless-stopped
+
+  # --- Dashboards ---
+  grafana:
+    image: grafana/grafana:13.2.5
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    secrets: [grafana_admin_password]
+    ports: ["3000:3000"]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [monitoring]
+    depends_on: [prometheus, loki]
+    <<: *hardened
+
+networks:
+  frontend:
+  backend:
+    internal: true
+  monitoring:
+
+volumes:
+  db-data:
+  prometheus-data:
+  loki-data:
+  grafana-data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password.txt
